@@ -26,8 +26,12 @@ from typing import Any
 
 DEFAULT_PORT = int(os.environ.get("BRIDGE_PORT", "11435"))
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
+GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
 CODEX_TIMEOUT_SECONDS = int(os.environ.get("CODEX_TIMEOUT_SECONDS", "120"))
+STARTUP_CHECK_TIMEOUT_SECONDS = int(os.environ.get("STARTUP_CHECK_TIMEOUT_SECONDS", "15"))
+STARTUP_CHECK_STRICT = os.environ.get("STARTUP_CHECK_STRICT", "0").strip().lower() in {"1", "true", "yes", "on"}
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "").strip()
 CODEX_MODEL_VERBOSITY = os.environ.get("CODEX_MODEL_VERBOSITY", "high").strip().lower()
 BRIDGE_MODEL_NAME = os.environ.get("BRIDGE_MODEL_NAME", "codex").strip() or "codex"
 LOG_VALUE_MAX_CHARS = int(os.environ.get("LOG_VALUE_MAX_CHARS", "200"))
@@ -66,7 +70,7 @@ def build_prompt_from_messages(messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def run_codex(prompt: str) -> BridgeResult:
+def run_codex(prompt: str, timeout_seconds: int | None = None) -> BridgeResult:
     cmd = [CODEX_BIN, "exec", "--skip-git-repo-check", "--json"]
     if CODEX_MODEL:
         cmd.extend(["--model", CODEX_MODEL])
@@ -83,7 +87,7 @@ def run_codex(prompt: str) -> BridgeResult:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        timeout=CODEX_TIMEOUT_SECONDS,
+        timeout=timeout_seconds if timeout_seconds is not None else CODEX_TIMEOUT_SECONDS,
         check=False,
         env=env,
     )
@@ -114,6 +118,69 @@ def run_codex(prompt: str) -> BridgeResult:
         raise RuntimeError("No assistant message found in codex output")
 
     return BridgeResult(text=answer, raw_events=events)
+
+
+def run_gemini(prompt: str, requested_model: str, timeout_seconds: int | None = None) -> BridgeResult:
+    cmd = [GEMINI_BIN, "--prompt", prompt]
+    gemini_model = ""
+    if requested_model and requested_model.lower() != "gemini":
+        gemini_model = requested_model
+    elif GEMINI_MODEL:
+        gemini_model = GEMINI_MODEL
+    if gemini_model:
+        cmd.extend(["--model", gemini_model])
+
+    env = os.environ.copy()
+    env.pop("CI", None)
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout_seconds if timeout_seconds is not None else CODEX_TIMEOUT_SECONDS,
+        check=False,
+        env=env,
+    )
+
+    if proc.returncode != 0:
+        err = proc.stderr.strip() or "gemini cli call failed"
+        raise RuntimeError(err)
+
+    answer = proc.stdout.strip()
+    if not answer:
+        raise RuntimeError("No assistant message found in gemini output")
+
+    return BridgeResult(text=answer, raw_events=[])
+
+
+def resolve_runner(model_name: str) -> tuple[str, str]:
+    normalized = model_name.strip().lower()
+    if not normalized or normalized.startswith("codex"):
+        return "codex", model_name.strip() or "codex"
+    if normalized.startswith("gemini"):
+        return "gemini", model_name.strip()
+    raise ValueError("model must start with 'codex' or 'gemini'")
+
+
+def run_model(model_name: str, prompt: str, timeout_seconds: int | None = None) -> BridgeResult:
+    runner, resolved = resolve_runner(model_name)
+    if runner == "codex":
+        return run_codex(prompt, timeout_seconds=timeout_seconds)
+    return run_gemini(prompt, resolved, timeout_seconds=timeout_seconds)
+
+
+def startup_probe(model_name: str, timeout_seconds: int) -> tuple[bool, str]:
+    probe_prompt = "Reply with one short word only: OK"
+    try:
+        result = run_model(model_name, probe_prompt, timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        return False, str(exc)
+    preview = result.text.strip().replace("\n", " ")
+    if len(preview) > 80:
+        preview = preview[:77] + "..."
+    return True, preview
 
 
 def json_response(handler: BaseHTTPRequestHandler, code: int, payload: dict[str, Any]) -> None:
@@ -151,6 +218,7 @@ def truncate_for_log(value: Any, max_chars: int) -> Any:
 
 class BridgeHandler(BaseHTTPRequestHandler):
     server_version = "CodexOllamaBridge/0.1"
+    _bridge_request_id: str = ""
 
     def _request_id(self) -> str:
         current = getattr(self, "_bridge_request_id", "")
@@ -172,7 +240,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
         print_pretty_json(truncate_for_log(payload, LOG_VALUE_MAX_CHARS))
 
     def do_GET(self) -> None:  # noqa: N802
-        self._log("request.received")
         if self.path == "/healthz":
             payload = {"ok": True, "time": now_iso()}
             json_response(self, HTTPStatus.OK, payload)
@@ -190,24 +257,25 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self._log("response.sent", status=int(HTTPStatus.NOT_FOUND), response=payload)
 
     def tags_payload(self) -> dict[str, Any]:
-        model_name = BRIDGE_MODEL_NAME
+        model_names = ["codex", "gemini"]
         return {
             "models": [
                 {
-                    "name": model_name,
-                    "model": model_name,
+                    "name": name,
+                    "model": name,
                     "modified_at": now_iso(),
                     "size": 0,
-                    "digest": "codex-bridge",
+                    "digest": f"{name}-bridge",
                     "details": {
                         "parent_model": "",
                         "format": "bridge",
-                        "family": "codex",
-                        "families": ["codex"],
+                        "family": name,
+                        "families": [name],
                         "parameter_size": "unknown",
                         "quantization_level": "none",
                     },
                 }
+                for name in model_names
             ]
         }
 
@@ -222,8 +290,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
             json_response(self, HTTPStatus.BAD_REQUEST, error_payload)
             self._log("response.sent", status=int(HTTPStatus.BAD_REQUEST), response=error_payload)
             return
-
-        self._log("request.received", request=payload)
 
         if self.path == "/api/chat":
             self.handle_chat(payload)
@@ -251,7 +317,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            result = run_codex(build_prompt_from_messages(messages))
+            result = run_model(model, build_prompt_from_messages(messages))
+        except ValueError as exc:
+            error_payload = {"error": str(exc)}
+            json_response(self, HTTPStatus.BAD_REQUEST, error_payload)
+            self._log("chat.error", status=int(HTTPStatus.BAD_REQUEST), error=str(exc))
+            return
         except Exception as exc:
             error_payload = {"error": str(exc)}
             json_response(self, HTTPStatus.BAD_GATEWAY, error_payload)
@@ -332,7 +403,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
         full_prompt = "\n".join(prompt_parts)
 
         try:
-            result = run_codex(full_prompt)
+            result = run_model(model, full_prompt)
+        except ValueError as exc:
+            error_payload = {"error": str(exc)}
+            json_response(self, HTTPStatus.BAD_REQUEST, error_payload)
+            self._log("generate.error", status=int(HTTPStatus.BAD_REQUEST), error=str(exc))
+            return
         except Exception as exc:
             error_payload = {"error": str(exc)}
             json_response(self, HTTPStatus.BAD_GATEWAY, error_payload)
@@ -404,8 +480,24 @@ def main() -> None:
     port = DEFAULT_PORT
     print(f"Starting bridge on http://{host}:{port}")
     print(f"Using codex binary: {CODEX_BIN}")
+    print(f"Using gemini binary: {GEMINI_BIN}")
     print(f"Using model verbosity: {CODEX_MODEL_VERBOSITY or 'default'}")
     print(f"Detail mode: {DETAIL_MODE}")
+
+    checks = ["codex", "gemini"]
+    check_results: dict[str, tuple[bool, str]] = {}
+    print("Running startup AI readiness checks...")
+    for name in checks:
+        ok, detail = startup_probe(name, timeout_seconds=STARTUP_CHECK_TIMEOUT_SECONDS)
+        check_results[name] = (ok, detail)
+        if ok:
+            print(f"[READY] {name}: {detail}")
+        else:
+            print(f"[FAIL ] {name}: {detail}")
+
+    if STARTUP_CHECK_STRICT and any(not ok for ok, _ in check_results.values()):
+        raise RuntimeError("Startup readiness checks failed and STARTUP_CHECK_STRICT is enabled")
+
     server = ReusableThreadingHTTPServer((host, port), BridgeHandler)
     server.serve_forever()
 

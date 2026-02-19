@@ -27,6 +27,11 @@
 
 This project exposes Ollama-like HTTP endpoints and routes requests to local `codex`.
 
+It now supports model routing by request model name:
+
+- `codex` (or values starting with `codex`) -> calls Codex CLI
+- `gemini` (or values starting with `gemini`) -> calls Gemini CLI
+
 <a id="en-endpoints"></a>
 ### Endpoints
 
@@ -46,12 +51,16 @@ Optional detail controls:
 - `DETAIL_MODE=off|high` (default: `high`)
 - `DETAIL_SYSTEM_INSTRUCTION="..."` to customize internal guidance
   (default favors natural conversational style, without forced numbering)
+- `GEMINI_BIN=gemini` to set Gemini CLI binary path
+- `GEMINI_MODEL=...` to set default Gemini model when request model is just `gemini`
 
 <a id="en-requirements"></a>
 ### Requirements
 
 - Python 3.10+
 - `codex` CLI installed and logged in
+- `gemini` CLI installed and logged in (only needed when using `gemini` model)
+- If Gemini CLI is configured to use Gemini API auth mode, set `GEMINI_API_KEY`
 
 <a id="en-run"></a>
 ### Run
@@ -78,6 +87,20 @@ curl -s http://localhost:11435/api/chat \
     "model": "codex",
     "messages": [
       {"role": "user", "content": "한 문장으로 인사해줘"}
+    ],
+    "stream": false
+  }'
+```
+
+#### Chat (Gemini)
+
+```bash
+curl -s http://localhost:11435/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gemini",
+    "messages": [
+      {"role": "user", "content": "Say hello in one sentence."}
     ],
     "stream": false
   }'
@@ -174,6 +197,11 @@ FAQ:
 
 이 프로젝트는 Ollama 스타일의 HTTP 엔드포인트를 제공하고 요청을 로컬 `codex`로 전달합니다.
 
+요청 `model` 값에 따라 CLI를 분기 호출합니다:
+
+- `codex` (또는 `codex`로 시작하는 값) -> Codex CLI 호출
+- `gemini` (또는 `gemini`로 시작하는 값) -> Gemini CLI 호출
+
 <a id="ko-endpoints"></a>
 ### 엔드포인트
 
@@ -193,12 +221,16 @@ FAQ:
 - `DETAIL_MODE=off|high` (기본값: `high`)
 - `DETAIL_SYSTEM_INSTRUCTION="..."` 내부 지침 문구를 사용자화
   (기본값은 번호 강제를 피한 자연스러운 대화 스타일)
+- `GEMINI_BIN=gemini` Gemini CLI 실행 파일 경로 설정
+- `GEMINI_MODEL=...` 요청 모델이 `gemini`일 때 기본 Gemini 모델 설정
 
 <a id="ko-requirements"></a>
 ### 요구 사항
 
 - Python 3.10+
 - `codex` CLI 설치 및 로그인 완료
+- `gemini` 모델 사용 시 `gemini` CLI 설치 및 로그인 완료
+- Gemini CLI 인증 모드가 Gemini API 방식이면 `GEMINI_API_KEY` 환경변수 설정 필요
 
 <a id="ko-run"></a>
 ### 실행
@@ -223,6 +255,20 @@ curl -s http://localhost:11435/api/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "codex",
+    "messages": [
+      {"role": "user", "content": "한 문장으로 인사해줘"}
+    ],
+    "stream": false
+  }'
+```
+
+#### Chat (Gemini)
+
+```bash
+curl -s http://localhost:11435/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gemini",
     "messages": [
       {"role": "user", "content": "한 문장으로 인사해줘"}
     ],
