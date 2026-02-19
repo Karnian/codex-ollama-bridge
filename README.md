@@ -1,8 +1,34 @@
 # codex2ollama bridge
 
+<a id="top"></a>
+
+## Language
+
+- [English](#english)
+- [한국어](#korean)
+
+---
+
+<a id="english"></a>
+## English
+
+### Quick Navigation
+
+- [Overview](#en-overview)
+- [Endpoints](#en-endpoints)
+- [Requirements](#en-requirements)
+- [Run](#en-run)
+- [Example Calls](#en-example-calls)
+- [Notes](#en-notes)
+- [Windows Packaging (PyInstaller)](#en-windows-packaging)
+
+<a id="en-overview"></a>
+### Overview
+
 This project exposes Ollama-like HTTP endpoints and routes requests to local `codex`.
 
-## Endpoints
+<a id="en-endpoints"></a>
+### Endpoints
 
 - `POST /api/chat`
 - `POST /api/generate`
@@ -11,35 +37,39 @@ This project exposes Ollama-like HTTP endpoints and routes requests to local `co
 
 Default port is `11435` (customizable with `BRIDGE_PORT`).
 
-By default the bridge uses your Codex CLI default model/profile. If needed, set
-`CODEX_MODEL` to force a specific model.
+By default, the bridge uses your Codex CLI default model/profile.
+If needed, set `CODEX_MODEL` to force a specific model.
 
 Optional detail controls:
 
 - `CODEX_MODEL_VERBOSITY=low|medium|high` (default: `high`)
 - `DETAIL_MODE=off|high` (default: `high`)
-- `DETAIL_SYSTEM_INSTRUCTION="..."` to customize internal guidance (default favors natural conversational style, without forced numbering)
+- `DETAIL_SYSTEM_INSTRUCTION="..."` to customize internal guidance
+  (default favors natural conversational style, without forced numbering)
 
-## Requirements
+<a id="en-requirements"></a>
+### Requirements
 
 - Python 3.10+
 - `codex` CLI installed and logged in
 
-## Run
+<a id="en-run"></a>
+### Run
 
 ```bash
 python3 bridge_server.py
 ```
 
-or with custom port:
+Or with custom port:
 
 ```bash
 BRIDGE_PORT=18080 python3 bridge_server.py
 ```
 
-## Example calls
+<a id="en-example-calls"></a>
+### Example Calls
 
-### Chat
+#### Chat
 
 ```bash
 curl -s http://localhost:11435/api/chat \
@@ -53,7 +83,7 @@ curl -s http://localhost:11435/api/chat \
   }'
 ```
 
-### Generate
+#### Generate
 
 ```bash
 curl -s http://localhost:11435/api/generate \
@@ -65,14 +95,208 @@ curl -s http://localhost:11435/api/generate \
   }'
 ```
 
-### Tags
+#### Tags
 
 ```bash
 curl -s http://localhost:11435/api/tags
 ```
 
-## Notes
+<a id="en-notes"></a>
+### Notes
 
 - `stream: true` is supported as Ollama-style NDJSON framing.
 - Current streaming is simulated from final response text produced by `codex exec`.
 - Unsupported Ollama options are ignored by design.
+
+<a id="en-windows-packaging"></a>
+### Windows Packaging (PyInstaller)
+
+Build on Windows (cmd.exe at repository root):
+
+```bat
+windows\build_windows_exe.bat
+```
+
+Output:
+
+- `dist\codex2ollama-bridge.exe`
+
+Run options:
+
+1. Double-click `dist\codex2ollama-bridge.exe` (console window stays open while running).
+2. Or use launcher script:
+
+```bat
+windows\start_bridge.bat
+```
+
+Optional environment variables in cmd before launch:
+
+```bat
+set BRIDGE_PORT=11435
+set CODEX_MODEL=gpt-5
+set CODEX_MODEL_VERBOSITY=high
+```
+
+Prerequisites on Windows:
+
+- `codex` CLI must be installed and logged in.
+- Allow firewall prompt if Windows asks on first run.
+
+FAQ:
+
+- Q: Do Windows end users need to install PyInstaller?
+  - A: No. Only the person building the `.exe` needs PyInstaller.
+- Q: Can I build `codex2ollama-bridge.exe` on macOS?
+  - A: Usually no. Build Windows `.exe` on Windows (local PC, VM, or CI runner).
+- Q: If I update `bridge_server.py`, do I need to edit `.bat` files?
+  - A: Usually no. Rebuild the `.exe`. Update `.bat` only if file names, exe name, or paths change.
+
+[Back to top](#top)
+
+---
+
+<a id="korean"></a>
+## 한국어
+
+### 빠른 이동
+
+- [개요](#ko-overview)
+- [엔드포인트](#ko-endpoints)
+- [요구 사항](#ko-requirements)
+- [실행](#ko-run)
+- [호출 예시](#ko-example-calls)
+- [참고 사항](#ko-notes)
+- [Windows 패키징 (PyInstaller)](#ko-windows-packaging)
+
+<a id="ko-overview"></a>
+### 개요
+
+이 프로젝트는 Ollama 스타일의 HTTP 엔드포인트를 제공하고 요청을 로컬 `codex`로 전달합니다.
+
+<a id="ko-endpoints"></a>
+### 엔드포인트
+
+- `POST /api/chat`
+- `POST /api/generate`
+- `GET /api/tags`
+- `GET /healthz`
+
+기본 포트는 `11435`이며 `BRIDGE_PORT`로 변경할 수 있습니다.
+
+기본적으로 브리지는 Codex CLI의 기본 모델/프로필을 사용합니다.
+필요하면 `CODEX_MODEL`을 설정해 특정 모델을 강제로 사용하게 할 수 있습니다.
+
+선택 가능한 상세 제어 옵션:
+
+- `CODEX_MODEL_VERBOSITY=low|medium|high` (기본값: `high`)
+- `DETAIL_MODE=off|high` (기본값: `high`)
+- `DETAIL_SYSTEM_INSTRUCTION="..."` 내부 지침 문구를 사용자화
+  (기본값은 번호 강제를 피한 자연스러운 대화 스타일)
+
+<a id="ko-requirements"></a>
+### 요구 사항
+
+- Python 3.10+
+- `codex` CLI 설치 및 로그인 완료
+
+<a id="ko-run"></a>
+### 실행
+
+```bash
+python3 bridge_server.py
+```
+
+또는 사용자 지정 포트로 실행:
+
+```bash
+BRIDGE_PORT=18080 python3 bridge_server.py
+```
+
+<a id="ko-example-calls"></a>
+### 호출 예시
+
+#### Chat
+
+```bash
+curl -s http://localhost:11435/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "codex",
+    "messages": [
+      {"role": "user", "content": "한 문장으로 인사해줘"}
+    ],
+    "stream": false
+  }'
+```
+
+#### Generate
+
+```bash
+curl -s http://localhost:11435/api/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "codex",
+    "prompt": "hello in one short sentence",
+    "stream": false
+  }'
+```
+
+#### Tags
+
+```bash
+curl -s http://localhost:11435/api/tags
+```
+
+<a id="ko-notes"></a>
+### 참고 사항
+
+- `stream: true`는 Ollama 스타일 NDJSON 프레이밍으로 지원됩니다.
+- 현재 스트리밍은 `codex exec` 최종 응답 텍스트를 기반으로 시뮬레이션됩니다.
+- 지원하지 않는 Ollama 옵션은 설계상 무시됩니다.
+
+<a id="ko-windows-packaging"></a>
+### Windows 패키징 (PyInstaller)
+
+Windows에서 빌드 (저장소 루트의 cmd.exe):
+
+```bat
+windows\build_windows_exe.bat
+```
+
+출력 파일:
+
+- `dist\codex2ollama-bridge.exe`
+
+실행 방법:
+
+1. `dist\codex2ollama-bridge.exe` 더블클릭 실행 (실행 중 콘솔 창 유지)
+2. 또는 런처 스크립트 사용:
+
+```bat
+windows\start_bridge.bat
+```
+
+실행 전 선택 환경변수(cmd):
+
+```bat
+set BRIDGE_PORT=11435
+set CODEX_MODEL=gpt-5
+set CODEX_MODEL_VERBOSITY=high
+```
+
+Windows 사전 조건:
+
+- `codex` CLI 설치 및 로그인 완료
+- 첫 실행 시 Windows 방화벽 허용 팝업이 뜨면 허용
+
+FAQ:
+
+- Q: Windows 최종 사용자가 PyInstaller를 설치해야 하나요?
+  - A: 아니요. `.exe`를 빌드하는 사람만 PyInstaller가 필요합니다.
+- Q: macOS에서 Windows용 `codex2ollama-bridge.exe`를 빌드할 수 있나요?
+  - A: 보통 어렵습니다. Windows(실PC, VM, CI 러너)에서 빌드하세요.
+- Q: `bridge_server.py`를 수정하면 `.bat` 파일도 수정해야 하나요?
+  - A: 대부분 아닙니다. `.exe`만 다시 빌드하면 됩니다. 파일명/경로/실행파일명이 바뀔 때만 `.bat` 수정이 필요합니다.
+
+[맨 위로](#top)
