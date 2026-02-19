@@ -76,7 +76,7 @@ def run_codex(prompt: str, timeout_seconds: int | None = None) -> BridgeResult:
         cmd.extend(["--model", CODEX_MODEL])
     if CODEX_MODEL_VERBOSITY in {"low", "medium", "high"}:
         cmd.extend(["-c", f'model_verbosity="{CODEX_MODEL_VERBOSITY}"'])
-    cmd.append(prompt)
+    cmd.append("-")
 
     env = os.environ.copy()
     env.setdefault("CI", "true")
@@ -84,6 +84,7 @@ def run_codex(prompt: str, timeout_seconds: int | None = None) -> BridgeResult:
 
     proc = subprocess.run(
         cmd,
+        input=prompt,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
