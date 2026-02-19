@@ -15,13 +15,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 DEFAULT_PORT = int(os.environ.get("BRIDGE_PORT", "11435"))
@@ -34,12 +36,16 @@ CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "").strip()
 CODEX_MODEL_VERBOSITY = os.environ.get("CODEX_MODEL_VERBOSITY", "high").strip().lower()
 BRIDGE_MODEL_NAME = os.environ.get("BRIDGE_MODEL_NAME", "codex").strip() or "codex"
-LOG_VALUE_MAX_CHARS = int(os.environ.get("LOG_VALUE_MAX_CHARS", "200"))
 DETAIL_MODE = os.environ.get("DETAIL_MODE", "high").strip().lower()
 DETAIL_SYSTEM_INSTRUCTION = os.environ.get(
     "DETAIL_SYSTEM_INSTRUCTION",
     "Always respond in the user's language environment and match the language used in the user's request unless explicitly asked otherwise. Respond naturally and conversationally. Prefer flowing prose and avoid forced numbered or bullet lists unless the user explicitly asks for list format. Give enough detail to be useful while keeping the flow smooth and readable.",
 ).strip()
+
+KST = ZoneInfo("Asia/Seoul")
+LOG_DIR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+active_log_file_path = ""
+LOG_FILE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -49,7 +55,25 @@ class BridgeResult:
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(KST).isoformat(timespec="microseconds")
+
+
+def append_log_text(text: str) -> None:
+    log_file_path = active_log_file_path
+    if not log_file_path:
+        os.makedirs(LOG_DIR_PATH, exist_ok=True)
+        fallback_name = datetime.now(KST).strftime("bridge_server-%Y%m%d-%H%M%S.log")
+        log_file_path = os.path.join(LOG_DIR_PATH, fallback_name)
+    with LOG_FILE_LOCK:
+        with open(log_file_path, "a", encoding="utf-8") as fp:
+            fp.write(text)
+            if not text.endswith("\n"):
+                fp.write("\n")
+
+
+def log_line(text: str) -> None:
+    print(text, flush=True)
+    append_log_text(text)
 
 
 def chunk_text(text: str, chunk_size: int = 40) -> list[str]:
@@ -194,27 +218,8 @@ def json_response(handler: BaseHTTPRequestHandler, code: int, payload: dict[str,
 
 
 def print_pretty_json(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), flush=True)
-
-
-def truncate_text(value: str, max_chars: int) -> str:
-    if max_chars <= 0 or len(value) <= max_chars:
-        return value
-    if max_chars <= 3:
-        return value[:max_chars]
-    return value[: max_chars - 3] + "..."
-
-
-def truncate_for_log(value: Any, max_chars: int) -> Any:
-    if isinstance(value, str):
-        return truncate_text(value, max_chars)
-    if isinstance(value, dict):
-        return {k: truncate_for_log(v, max_chars) for k, v in value.items()}
-    if isinstance(value, list):
-        return [truncate_for_log(item, max_chars) for item in value]
-    if isinstance(value, tuple):
-        return [truncate_for_log(item, max_chars) for item in value]
-    return value
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    log_line(rendered)
 
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -238,7 +243,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             "event": event,
             **fields,
         }
-        print_pretty_json(truncate_for_log(payload, LOG_VALUE_MAX_CHARS))
+        print_pretty_json(payload)
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/healthz":
@@ -469,7 +474,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         request_id = uuid.uuid4().hex[:8]
-        print(f"[{request_id}] {self.address_string()} - {format % args}")
+        log_line(f"[{now_iso()}] [{request_id}] {self.address_string()} - {format % args}")
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -477,24 +482,30 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 
 
 def main() -> None:
+    global active_log_file_path
+
     host = "0.0.0.0"
     port = DEFAULT_PORT
-    print(f"Starting bridge on http://{host}:{port}")
-    print(f"Using codex binary: {CODEX_BIN}")
-    print(f"Using gemini binary: {GEMINI_BIN}")
-    print(f"Using model verbosity: {CODEX_MODEL_VERBOSITY or 'default'}")
-    print(f"Detail mode: {DETAIL_MODE}")
+    os.makedirs(LOG_DIR_PATH, exist_ok=True)
+    start_name = datetime.now(KST).strftime("bridge_server-%Y%m%d-%H%M%S.log")
+    active_log_file_path = os.path.join(LOG_DIR_PATH, start_name)
+    log_line(f"[{now_iso()}] Starting bridge on http://{host}:{port}")
+    log_line(f"[{now_iso()}] Log file: {active_log_file_path}")
+    log_line(f"[{now_iso()}] Using codex binary: {CODEX_BIN}")
+    log_line(f"[{now_iso()}] Using gemini binary: {GEMINI_BIN}")
+    log_line(f"[{now_iso()}] Using model verbosity: {CODEX_MODEL_VERBOSITY or 'default'}")
+    log_line(f"[{now_iso()}] Detail mode: {DETAIL_MODE}")
 
     checks = ["codex", "gemini"]
     check_results: dict[str, tuple[bool, str]] = {}
-    print("Running startup AI readiness checks...")
+    log_line(f"[{now_iso()}] Running startup AI readiness checks...")
     for name in checks:
         ok, detail = startup_probe(name, timeout_seconds=STARTUP_CHECK_TIMEOUT_SECONDS)
         check_results[name] = (ok, detail)
         if ok:
-            print(f"[READY] {name}: {detail}")
+            log_line(f"[{now_iso()}] [READY] {name}: {detail}")
         else:
-            print(f"[FAIL ] {name}: {detail}")
+            log_line(f"[{now_iso()}] [FAIL ] {name}: {detail}")
 
     if STARTUP_CHECK_STRICT and any(not ok for ok, _ in check_results.values()):
         raise RuntimeError("Startup readiness checks failed and STARTUP_CHECK_STRICT is enabled")

@@ -53,6 +53,8 @@ Optional detail controls:
   (default favors natural conversational style, without forced numbering)
 - `GEMINI_BIN=gemini` to set Gemini CLI binary path
 - `GEMINI_MODEL=...` to set default Gemini model when request model is just `gemini`
+- `STARTUP_CHECK_TIMEOUT_SECONDS=15` startup readiness check timeout
+- `STARTUP_CHECK_STRICT=1` abort server start when any startup check fails
 
 <a id="en-requirements"></a>
 ### Requirements
@@ -129,6 +131,10 @@ curl -s http://localhost:11435/api/tags
 
 - `stream: true` is supported as Ollama-style NDJSON framing.
 - Current streaming is simulated from final response text produced by `codex exec`.
+- Codex prompts are passed through stdin (`codex exec -`) to avoid OS argv length limits.
+- On startup, the server probes both `codex` and `gemini` and prints `[READY]`/`[FAIL ]` with reason.
+- Full logs are written to `logs/bridge_server-YYYYMMDD-HHMMSS.log` on each start.
+- Log timestamps use Korea Standard Time (`Asia/Seoul`, `+09:00`).
 - Unsupported Ollama options are ignored by design.
 
 <a id="en-windows-packaging"></a>
@@ -223,6 +229,8 @@ FAQ:
   (기본값은 번호 강제를 피한 자연스러운 대화 스타일)
 - `GEMINI_BIN=gemini` Gemini CLI 실행 파일 경로 설정
 - `GEMINI_MODEL=...` 요청 모델이 `gemini`일 때 기본 Gemini 모델 설정
+- `STARTUP_CHECK_TIMEOUT_SECONDS=15` 시작 시 준비상태 점검 타임아웃
+- `STARTUP_CHECK_STRICT=1` 시작 점검 하나라도 실패하면 서버 시작 중단
 
 <a id="ko-requirements"></a>
 ### 요구 사항
@@ -299,6 +307,10 @@ curl -s http://localhost:11435/api/tags
 
 - `stream: true`는 Ollama 스타일 NDJSON 프레이밍으로 지원됩니다.
 - 현재 스트리밍은 `codex exec` 최종 응답 텍스트를 기반으로 시뮬레이션됩니다.
+- Codex 프롬프트는 OS 인자 길이 제한을 피하기 위해 stdin(`codex exec -`)으로 전달됩니다.
+- 서버 시작 시 `codex`/`gemini` 호출 준비상태를 점검하고 `[READY]`/`[FAIL ]` 이유를 출력합니다.
+- 전체 로그는 매번 시작 시간 기준 새 파일 `logs/bridge_server-YYYYMMDD-HHMMSS.log`에 저장됩니다.
+- 로그 시간대는 한국시간(`Asia/Seoul`, `+09:00`) 기준입니다.
 - 지원하지 않는 Ollama 옵션은 설계상 무시됩니다.
 
 <a id="ko-windows-packaging"></a>
