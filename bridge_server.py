@@ -14,21 +14,26 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import subprocess
 import threading
 import time
 import uuid
+from getpass import getpass
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from zoneinfo import ZoneInfo
 
 
 DEFAULT_PORT = int(os.environ.get("BRIDGE_PORT", "11435"))
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
+GEMINI_API_BASE_URL = os.environ.get("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
 CODEX_TIMEOUT_SECONDS = int(os.environ.get("CODEX_TIMEOUT_SECONDS", "120"))
 STARTUP_CHECK_TIMEOUT_SECONDS = int(os.environ.get("STARTUP_CHECK_TIMEOUT_SECONDS", "15"))
 STARTUP_CHECK_STRICT = os.environ.get("STARTUP_CHECK_STRICT", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -44,8 +49,25 @@ DETAIL_SYSTEM_INSTRUCTION = os.environ.get(
 
 KST = ZoneInfo("Asia/Seoul")
 LOG_DIR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+SETTINGS_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".bridge_settings.json")
+SECRETS_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".bridge_secrets.json")
 active_log_file_path = ""
 LOG_FILE_LOCK = threading.Lock()
+CONSOLE_LOG_VALUE_MAX_CHARS = 200
+gemini_auth_mode = "google"
+
+
+def resolve_gemini_model_name(requested_model: str) -> str:
+    normalized = requested_model.strip().lower()
+    if normalized and normalized != "gemini":
+        return requested_model.strip()
+    if GEMINI_MODEL:
+        return GEMINI_MODEL
+    return "gemini-2.5-flash"
+
+
+def build_gemini_ssl_context() -> ssl.SSLContext:
+    return ssl._create_unverified_context()  # noqa: SLF001
 
 
 @dataclass
@@ -74,6 +96,26 @@ def append_log_text(text: str) -> None:
 def log_line(text: str) -> None:
     print(text, flush=True)
     append_log_text(text)
+
+
+def truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    if max_chars <= 3:
+        return value[:max_chars]
+    return value[: max_chars - 3] + "..."
+
+
+def truncate_for_console(value: Any, max_chars: int) -> Any:
+    if isinstance(value, str):
+        return truncate_text(value, max_chars)
+    if isinstance(value, dict):
+        return {k: truncate_for_console(v, max_chars) for k, v in value.items()}
+    if isinstance(value, list):
+        return [truncate_for_console(item, max_chars) for item in value]
+    if isinstance(value, tuple):
+        return [truncate_for_console(item, max_chars) for item in value]
+    return value
 
 
 def chunk_text(text: str, chunk_size: int = 40) -> list[str]:
@@ -145,19 +187,18 @@ def run_codex(prompt: str, timeout_seconds: int | None = None) -> BridgeResult:
     return BridgeResult(text=answer, raw_events=events)
 
 
-def run_gemini(prompt: str, requested_model: str, timeout_seconds: int | None = None) -> BridgeResult:
+def run_gemini_cli(prompt: str, requested_model: str, timeout_seconds: int | None = None) -> BridgeResult:
     cmd = [GEMINI_BIN, "--prompt", prompt]
-    gemini_model = ""
-    if requested_model and requested_model.lower() != "gemini":
-        gemini_model = requested_model
-    elif GEMINI_MODEL:
-        gemini_model = GEMINI_MODEL
+    gemini_model = resolve_gemini_model_name(requested_model)
     if gemini_model:
         cmd.extend(["--model", gemini_model])
 
     env = os.environ.copy()
     env.pop("CI", None)
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    env.pop("GEMINI_API_KEY", None)
+    env.pop("GOOGLE_API_KEY", None)
+    env["GOOGLE_GENAI_USE_GCA"] = "true"
 
     proc = subprocess.run(
         cmd,
@@ -178,6 +219,64 @@ def run_gemini(prompt: str, requested_model: str, timeout_seconds: int | None = 
         raise RuntimeError("No assistant message found in gemini output")
 
     return BridgeResult(text=answer, raw_events=[])
+
+
+def run_gemini_api(prompt: str, requested_model: str, timeout_seconds: int | None = None) -> BridgeResult:
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Gemini auth mode is 'api' but GEMINI_API_KEY is not set")
+
+    model_name = resolve_gemini_model_name(requested_model)
+    endpoint = f"{GEMINI_API_BASE_URL}/models/{model_name}:generateContent?key={api_key}"
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}],
+            }
+        ]
+    }
+    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urlrequest.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+
+    timeout = timeout_seconds if timeout_seconds is not None else CODEX_TIMEOUT_SECONDS
+    ssl_context = build_gemini_ssl_context()
+    try:
+        with urlrequest.urlopen(req, timeout=timeout, context=ssl_context) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+        raise RuntimeError(f"gemini api call failed ({exc.code}): {detail}") from exc
+    except urlerror.URLError as exc:
+        raise RuntimeError(f"gemini api call failed: {exc.reason}") from exc
+
+    parsed = json.loads(raw)
+    candidates = parsed.get("candidates", [])
+    if not isinstance(candidates, list) or not candidates:
+        raise RuntimeError(f"gemini api returned no candidates: {raw}")
+    content = candidates[0].get("content", {})
+    parts = content.get("parts", []) if isinstance(content, dict) else []
+    text_parts: list[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            text = str(part.get("text", ""))
+            if text:
+                text_parts.append(text)
+    answer = "\n".join(text_parts).strip()
+    if not answer:
+        raise RuntimeError(f"gemini api returned empty text: {raw}")
+    return BridgeResult(text=answer, raw_events=[])
+
+
+def run_gemini(prompt: str, requested_model: str, timeout_seconds: int | None = None) -> BridgeResult:
+    if gemini_auth_mode == "api":
+        return run_gemini_api(prompt, requested_model, timeout_seconds=timeout_seconds)
+    return run_gemini_cli(prompt, requested_model, timeout_seconds=timeout_seconds)
 
 
 def resolve_runner(model_name: str) -> tuple[str, str]:
@@ -208,6 +307,107 @@ def startup_probe(model_name: str, timeout_seconds: int) -> tuple[bool, str]:
     return True, preview
 
 
+def load_settings() -> dict[str, Any]:
+    try:
+        with open(SETTINGS_FILE_PATH, "r", encoding="utf-8") as fp:
+            loaded = json.load(fp)
+        if isinstance(loaded, dict):
+            return loaded
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    return {}
+
+
+def save_settings(settings: dict[str, Any]) -> None:
+    with open(SETTINGS_FILE_PATH, "w", encoding="utf-8") as fp:
+        json.dump(settings, fp, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def load_secrets() -> dict[str, Any]:
+    try:
+        with open(SECRETS_FILE_PATH, "r", encoding="utf-8") as fp:
+            loaded = json.load(fp)
+        if isinstance(loaded, dict):
+            return loaded
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    return {}
+
+
+def save_secrets(secrets: dict[str, Any]) -> None:
+    with open(SECRETS_FILE_PATH, "w", encoding="utf-8") as fp:
+        json.dump(secrets, fp, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def choose_gemini_auth_mode_interactive(default_mode: str) -> str:
+    log_line("[setup] Gemini auth mode is not configured.")
+    log_line("[setup] Choose Gemini auth mode: [1] google (default), [2] api")
+    answer = input("Select mode (Enter=1): ").strip().lower()
+    if answer in {"2", "api", "apikey", "api-key"}:
+        return "api"
+    if answer in {"1", "google", "", "g"}:
+        return "google"
+    log_line(f"[setup] Unknown choice '{answer}'. Using default: {default_mode}")
+    return default_mode
+
+
+def ensure_gemini_auth_mode() -> str:
+    env_mode = os.environ.get("GEMINI_AUTH_MODE", "").strip().lower()
+    if env_mode in {"google", "api"}:
+        return env_mode
+
+    settings = load_settings()
+    saved_mode = str(settings.get("gemini_auth_mode", "")).strip().lower()
+    if saved_mode in {"google", "api"}:
+        return saved_mode
+
+    default_mode = "google"
+    selected_mode = default_mode
+    if os.isatty(0):
+        selected_mode = choose_gemini_auth_mode_interactive(default_mode)
+
+    settings["gemini_auth_mode"] = selected_mode
+    save_settings(settings)
+    return selected_mode
+
+
+def ensure_api_key_for_gemini_if_needed(mode: str) -> None:
+    if mode != "api":
+        return
+
+    existing_key = os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
+    if existing_key:
+        os.environ["GEMINI_API_KEY"] = existing_key
+        os.environ["GOOGLE_API_KEY"] = existing_key
+        secrets = load_secrets()
+        if str(secrets.get("gemini_api_key", "")).strip() != existing_key:
+            secrets["gemini_api_key"] = existing_key
+            save_secrets(secrets)
+        return
+
+    secrets = load_secrets()
+    saved_key = str(secrets.get("gemini_api_key", "")).strip()
+    if saved_key:
+        os.environ["GEMINI_API_KEY"] = saved_key
+        os.environ["GOOGLE_API_KEY"] = saved_key
+        return
+
+    if not os.isatty(0):
+        return
+
+    log_line("[setup] Gemini API mode selected but API key is missing.")
+    entered_key = getpass("Enter GEMINI_API_KEY (input hidden): ").strip()
+    if entered_key:
+        os.environ["GEMINI_API_KEY"] = entered_key
+        os.environ["GOOGLE_API_KEY"] = entered_key
+        secrets["gemini_api_key"] = entered_key
+        save_secrets(secrets)
+
+
 def json_response(handler: BaseHTTPRequestHandler, code: int, payload: dict[str, Any]) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(code)
@@ -218,8 +418,15 @@ def json_response(handler: BaseHTTPRequestHandler, code: int, payload: dict[str,
 
 
 def print_pretty_json(payload: dict[str, Any]) -> None:
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-    log_line(rendered)
+    full_rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    console_rendered = json.dumps(
+        truncate_for_console(payload, CONSOLE_LOG_VALUE_MAX_CHARS),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    print(console_rendered, flush=True)
+    append_log_text(full_rendered)
 
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -482,15 +689,20 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 
 
 def main() -> None:
-    global active_log_file_path
+    global active_log_file_path, gemini_auth_mode
 
     host = "0.0.0.0"
     port = DEFAULT_PORT
     os.makedirs(LOG_DIR_PATH, exist_ok=True)
     start_name = datetime.now(KST).strftime("bridge_server-%Y%m%d-%H%M%S.log")
     active_log_file_path = os.path.join(LOG_DIR_PATH, start_name)
+
+    gemini_auth_mode = ensure_gemini_auth_mode()
+    ensure_api_key_for_gemini_if_needed(gemini_auth_mode)
+
     log_line(f"[{now_iso()}] Starting bridge on http://{host}:{port}")
     log_line(f"[{now_iso()}] Log file: {active_log_file_path}")
+    log_line(f"[{now_iso()}] Gemini auth mode: {gemini_auth_mode}")
     log_line(f"[{now_iso()}] Using codex binary: {CODEX_BIN}")
     log_line(f"[{now_iso()}] Using gemini binary: {GEMINI_BIN}")
     log_line(f"[{now_iso()}] Using model verbosity: {CODEX_MODEL_VERBOSITY or 'default'}")

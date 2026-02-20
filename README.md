@@ -30,7 +30,9 @@ This project exposes Ollama-like HTTP endpoints and routes requests to local `co
 It now supports model routing by request model name:
 
 - `codex` (or values starting with `codex`) -> calls Codex CLI
-- `gemini` (or values starting with `gemini`) -> calls Gemini CLI
+- `gemini` (or values starting with `gemini`) -> calls Gemini provider selected at startup
+  - `google` mode (default): Gemini CLI (Google auth)
+  - `api` mode: direct Gemini API call (API key)
 
 <a id="en-endpoints"></a>
 ### Endpoints
@@ -53,6 +55,8 @@ Optional detail controls:
   (default favors natural conversational style, without forced numbering)
 - `GEMINI_BIN=gemini` to set Gemini CLI binary path
 - `GEMINI_MODEL=...` to set default Gemini model when request model is just `gemini`
+- `GEMINI_AUTH_MODE=google|api` to override Gemini auth mode (`google` default)
+- `GEMINI_API_BASE_URL=...` to override Gemini API base URL (default: `https://generativelanguage.googleapis.com/v1beta`)
 - `STARTUP_CHECK_TIMEOUT_SECONDS=15` startup readiness check timeout
 - `STARTUP_CHECK_STRICT=1` abort server start when any startup check fails
 
@@ -135,6 +139,12 @@ curl -s http://localhost:11435/api/tags
 - On startup, the server probes both `codex` and `gemini` and prints `[READY]`/`[FAIL ]` with reason.
 - Full logs are written to `logs/bridge_server-YYYYMMDD-HHMMSS.log` on each start.
 - Log timestamps use Korea Standard Time (`Asia/Seoul`, `+09:00`).
+- On first launch, Gemini auth mode can be selected (`google` default, or `api`).
+- The selected mode is saved to `.bridge_settings.json`.
+- If `api` mode is selected and API key env is missing, the server prompts for `GEMINI_API_KEY` in terminal.
+- Entered API key is saved to `.bridge_secrets.json` and reused on next starts.
+- In `api` mode, Gemini requests are sent directly to Gemini API (no Gemini CLI process for requests).
+- In `api` mode, TLS certificate verification is disabled for Gemini API requests.
 - Unsupported Ollama options are ignored by design.
 
 <a id="en-windows-packaging"></a>
@@ -206,7 +216,9 @@ FAQ:
 요청 `model` 값에 따라 CLI를 분기 호출합니다:
 
 - `codex` (또는 `codex`로 시작하는 값) -> Codex CLI 호출
-- `gemini` (또는 `gemini`로 시작하는 값) -> Gemini CLI 호출
+- `gemini` (또는 `gemini`로 시작하는 값) -> 시작 시 선택한 Gemini 공급자 호출
+  - `google` 모드(기본): Gemini CLI (Google 인증)
+  - `api` 모드: Gemini API 직접 호출 (API 키)
 
 <a id="ko-endpoints"></a>
 ### 엔드포인트
@@ -229,6 +241,8 @@ FAQ:
   (기본값은 번호 강제를 피한 자연스러운 대화 스타일)
 - `GEMINI_BIN=gemini` Gemini CLI 실행 파일 경로 설정
 - `GEMINI_MODEL=...` 요청 모델이 `gemini`일 때 기본 Gemini 모델 설정
+- `GEMINI_AUTH_MODE=google|api` Gemini 인증 모드 강제 지정 (`google` 기본)
+- `GEMINI_API_BASE_URL=...` Gemini API 기본 URL 지정 (기본값: `https://generativelanguage.googleapis.com/v1beta`)
 - `STARTUP_CHECK_TIMEOUT_SECONDS=15` 시작 시 준비상태 점검 타임아웃
 - `STARTUP_CHECK_STRICT=1` 시작 점검 하나라도 실패하면 서버 시작 중단
 
@@ -311,6 +325,12 @@ curl -s http://localhost:11435/api/tags
 - 서버 시작 시 `codex`/`gemini` 호출 준비상태를 점검하고 `[READY]`/`[FAIL ]` 이유를 출력합니다.
 - 전체 로그는 매번 시작 시간 기준 새 파일 `logs/bridge_server-YYYYMMDD-HHMMSS.log`에 저장됩니다.
 - 로그 시간대는 한국시간(`Asia/Seoul`, `+09:00`) 기준입니다.
+- 최초 실행 시 Gemini 인증 모드를 선택할 수 있습니다 (`google` 기본, `api` 선택 가능).
+- 선택된 모드는 `.bridge_settings.json`에 저장됩니다.
+- `api` 모드 선택 시 API 키 환경변수가 없으면 서버 시작 중 터미널에서 `GEMINI_API_KEY` 입력을 요청합니다.
+- 입력된 API 키는 `.bridge_secrets.json`에 저장되어 다음 실행부터 재사용됩니다.
+- `api` 모드에서는 Gemini 요청을 Gemini API로 직접 보냅니다(요청 시 Gemini CLI 프로세스 미사용).
+- `api` 모드에서는 Gemini API 요청 시 TLS 인증서 검증을 비활성화합니다.
 - 지원하지 않는 Ollama 옵션은 설계상 무시됩니다.
 
 <a id="ko-windows-packaging"></a>

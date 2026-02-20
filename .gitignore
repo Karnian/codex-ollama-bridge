@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *.log
 .env
+.bridge_settings.json
+.bridge_secrets.json
