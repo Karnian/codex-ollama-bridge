@@ -29,7 +29,9 @@ This project exposes Ollama-like HTTP endpoints and routes requests to local `co
 
 It now supports model routing by request model name:
 
-- `codex` (or values starting with `codex`) -> calls Codex CLI
+- `codex` (or values containing `codex`) -> calls Codex CLI
+  - `model: "codex"` uses `CODEX_MODEL` (if set) or Codex CLI default profile model
+  - explicit names such as `gpt-3.5-codex` are passed to `codex exec --model`
 - `gemini` (or values starting with `gemini`) -> calls Gemini provider selected at startup
   - `google` mode (default): Gemini CLI (Google auth)
   - `api` mode: direct Gemini API call (API key)
@@ -215,7 +217,9 @@ FAQ:
 
 요청 `model` 값에 따라 CLI를 분기 호출합니다:
 
-- `codex` (또는 `codex`로 시작하는 값) -> Codex CLI 호출
+- `codex` (또는 `codex`를 포함하는 값) -> Codex CLI 호출
+  - `model: "codex"`는 `CODEX_MODEL`(설정 시) 또는 Codex CLI 기본 프로파일 모델 사용
+  - `gpt-3.5-codex` 같은 명시 모델명은 `codex exec --model`로 전달
 - `gemini` (또는 `gemini`로 시작하는 값) -> 시작 시 선택한 Gemini 공급자 호출
   - `google` 모드(기본): Gemini CLI (Google 인증)
   - `api` 모드: Gemini API 직접 호출 (API 키)

@@ -66,6 +66,15 @@ def resolve_gemini_model_name(requested_model: str) -> str:
     return "gemini-2.5-flash"
 
 
+def resolve_codex_model_name(requested_model: str) -> str:
+    normalized = requested_model.strip().lower()
+    if not normalized or normalized == "codex":
+        return CODEX_MODEL
+    if "codex" in normalized:
+        return requested_model.strip()
+    return CODEX_MODEL
+
+
 def build_gemini_ssl_context() -> ssl.SSLContext:
     return ssl._create_unverified_context()  # noqa: SLF001
 
@@ -136,10 +145,11 @@ def build_prompt_from_messages(messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def run_codex(prompt: str, timeout_seconds: int | None = None) -> BridgeResult:
+def run_codex(prompt: str, requested_model: str, timeout_seconds: int | None = None) -> BridgeResult:
     cmd = [CODEX_BIN, "exec", "--skip-git-repo-check", "--json"]
-    if CODEX_MODEL:
-        cmd.extend(["--model", CODEX_MODEL])
+    codex_model = resolve_codex_model_name(requested_model)
+    if codex_model:
+        cmd.extend(["--model", codex_model])
     if CODEX_MODEL_VERBOSITY in {"low", "medium", "high"}:
         cmd.extend(["-c", f'model_verbosity="{CODEX_MODEL_VERBOSITY}"'])
     cmd.append("-")
@@ -227,6 +237,8 @@ def run_gemini_api(prompt: str, requested_model: str, timeout_seconds: int | Non
         raise RuntimeError("Gemini auth mode is 'api' but GEMINI_API_KEY is not set")
 
     model_name = resolve_gemini_model_name(requested_model)
+    if (not requested_model.strip() or requested_model.strip().lower() == "gemini") and not GEMINI_MODEL:
+        model_name = "gemini-flash-latest"
     endpoint = f"{GEMINI_API_BASE_URL}/models/{model_name}:generateContent?key={api_key}"
     body = {
         "contents": [
@@ -283,6 +295,8 @@ def resolve_runner(model_name: str) -> tuple[str, str]:
     normalized = model_name.strip().lower()
     if not normalized or normalized.startswith("codex"):
         return "codex", model_name.strip() or "codex"
+    if "codex" in normalized:
+        return "codex", model_name.strip()
     if normalized.startswith("gemini"):
         return "gemini", model_name.strip()
     raise ValueError("model must start with 'codex' or 'gemini'")
@@ -291,7 +305,7 @@ def resolve_runner(model_name: str) -> tuple[str, str]:
 def run_model(model_name: str, prompt: str, timeout_seconds: int | None = None) -> BridgeResult:
     runner, resolved = resolve_runner(model_name)
     if runner == "codex":
-        return run_codex(prompt, timeout_seconds=timeout_seconds)
+        return run_codex(prompt, resolved, timeout_seconds=timeout_seconds)
     return run_gemini(prompt, resolved, timeout_seconds=timeout_seconds)
 
 
